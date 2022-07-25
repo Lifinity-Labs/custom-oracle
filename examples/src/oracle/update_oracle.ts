@@ -7,13 +7,9 @@ import { Jupiter, RouteInfo, SplitTradeAmm, TOKEN_LIST_URL } from "@jup-ag/core"
 import assert from "assert";
 import fetch from 'node-fetch';
 
-// import dotenv from 'dotenv'
-
-// dotenv.config();
-
 const OUTER_INTERVAL = 10_000;
 
-const TX_DURATION = 120_000; // 2 minutes
+const TX_DURATION = 120_000;
 
 const SEND_OPTIONS = {
     skipPreflight: true,
@@ -104,13 +100,13 @@ function composeUpdatePriceTransaction(connection: Connection, programId: Public
 }
 
 export interface Token {
-    chainId: number; // 101,
-    address: string; // '8f9s1sUmzUbVZMoMh6bufMueYH1u4BJSM57RCEvuVmFp',
-    symbol: string; // 'TRUE',
-    name: string; // 'TrueSight',
-    decimals: number; // 9,
-    logoURI: string; // 'https://i.ibb.co/pKTWrwP/true.jpg',
-    tags: string[]; // [ 'utility-token', 'capital-token' ]
+    chainId: number;
+    address: string;
+    symbol: string;
+    name: string;
+    decimals: number;
+    logoURI: string;
+    tags: string[];
 }
 
 interface Config {
@@ -119,19 +115,19 @@ interface Config {
     payer: number[]
     pythAccount: number[]
     programId: string
-    baseTokenMint: string           // ベーストークンのミント (USDC/USDT なら USDC)
-    quoteTokenMint: string          // クォートトークンのミント (USDC/USDT なら USDT)
-    baseQuantity: number            // ベーストークンの amountIn 数量 (1 なら 1 USDC)
-    quoteQuantity: number           // クォートトークンの amountIn 数量 (1 なら 1 USDT)
-    slippage: number                // スリッページ (%) <- 特に使っていない
-    fetchInterval: number           // Jupiter データを取得する時間間隔
-    updateThreshold: number         // オンチェーンデータを更新する価格変動 (%) の閾値
-    updateInterval: number          // オンチェーンデータを強制的に更新する時間間隔
-    confidence: number              // 信頼区間
-    inactiveDuration: number        // これより長い時間更新されなかったら強制的にステータスを無効にする (設定値が 0 なら無視)
-    minThreshold: number            // 価格の下限（これを超えたら無効）
-    maxThreshold: number            // 価格の上限（これを超えたら無効）
-    allowNegativeSpread: boolean    // ネガティブスプレッド（ビッド > アスク）も許容するかどうか
+    baseTokenMint: string
+    quoteTokenMint: string
+    baseQuantity: number
+    quoteQuantity: number
+    slippage: number
+    fetchInterval: number
+    updateThreshold: number
+    updateInterval: number
+    confidence: number
+    inactiveDuration: number
+    minThreshold: number
+    maxThreshold: number
+    allowNegativeSpread: boolean
 }
 
 class Main extends BasicRunnable<Config> {
@@ -171,9 +167,6 @@ class Main extends BasicRunnable<Config> {
             this.logger.error("cannot find LFNTY-USDC pool")
             return;
         }
-
-        // バイバックトークンの残高を確認して、取引数量の再計算
-        // await this.updateTokenBalance();
     }
 
     async resolveTokenAccount(mint: PublicKey, tokenAccount: string | undefined): Promise<PublicKey> {
@@ -190,12 +183,11 @@ class Main extends BasicRunnable<Config> {
         const route = await jupiter.computeRoutes({
             inputMint: src,
             outputMint: dst,
-            inputAmount,        // 1_000_000 => 1 USDC if src is USDC mint
+            inputAmount,
             slippage,
             forceFetch: true,
         });
 
-        // ルーティングとスプリットは除外
         for (const ri of route.routesInfos) {
             if (ri.marketInfos.length === 1) {
                 if (!(ri.marketInfos[0].amm instanceof SplitTradeAmm)) {
@@ -208,14 +200,11 @@ class Main extends BasicRunnable<Config> {
     async updatePrice(price: number, status: number, now: number): Promise<void> {
         this.logger.debug(`updating: price=${price.toFixed(8)}, status=${status}, now=${now}`);
 
-        // トランザクションの準備
         const tx = composeUpdatePriceTransaction(this.connection, this.programId, this.pythAccount.publicKey, price, this.confidence, status);
         const { blockhash } = await this.connection.getLatestBlockhash();
         tx.recentBlockhash = blockhash;
         tx.sign(this.payer, this.pythAccount);
         
-        // トランザクションの実行（2 分ほどかけて TX チェックと再送を行い、それでもダメならタイムアウト）
-        // ただし、メインループの処理を実行するために、新たな Promise を起動し、本関数からは TX 完了を待たずに抜ける
         transactionSenderAndConfirmationWaiter(this.connection, tx).then(({txid, transactionResponse}) => {
             this.logger.debug(`executed update tx: ${txid}`);
         }).catch();
@@ -226,7 +215,6 @@ class Main extends BasicRunnable<Config> {
     }
 
     needUpdate(price: number, now: number): boolean {
-        // N% の変動または一定時間経過で更新
         if (now > this.lastUpdate + this.updateInterval)
             return true;
 
@@ -262,9 +250,6 @@ class Main extends BasicRunnable<Config> {
         this.maxThreshold = config.maxThreshold;
         this.allowNegativeSpread = config.allowNegativeSpread;
 
-        // DEBUG ログを非表示にするには、以下の行をアンコメント。
-        // this.logger.setSettings({'minLevel': 'info'});
-
         if (this.inactiveDuration && this.inactiveDuration < this.updateInterval) {
             this.logger.error("inappropriate config: 'inactiveDuration' must be longer than 'updateInterval'");
             return;
@@ -286,7 +271,6 @@ class Main extends BasicRunnable<Config> {
 
         while (!this._done) {
             try {
-                // コネクションなど長時間稼働中に作り直しが必要かもしれないオブジェクトはループ内で構築。
                 this.connection = new Connection(config.connection);
 
                 const jupiter = await Jupiter.load({
@@ -298,10 +282,7 @@ class Main extends BasicRunnable<Config> {
                 while (!this._done) {
                     const now = Date.now();
 
-                    // base -> quote (sell base / buy quote)
                     const routeInfo0 = await this.getBestRoute(jupiter, this.baseTokenMint, this.quoteTokenMint, this.baseQuantity, this.slippage);
-
-                    // quote -> base (buy base / sell quote)
                     const routeInfo1 = await this.getBestRoute(jupiter, this.quoteTokenMint, this.baseTokenMint, this.quoteQuantity, this.slippage);
 
                     if (routeInfo0 && routeInfo1) {
@@ -319,7 +300,6 @@ class Main extends BasicRunnable<Config> {
                         }
                     }
 
-                    // 最終更新から時間が経っていたらルートが見つからない状態がしばらく続いている可能性があるのでステータスを無効にする
                     if (this.inactiveDuration && now > this.lastUpdate + this.inactiveDuration && this.lastStatus) {
                         this.logger.warn(`disabling oracle: no update for ${this.inactiveDuration} ms`);
                         await this.updatePrice(this.lastPrice, 0, now);

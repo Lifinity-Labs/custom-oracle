@@ -7,7 +7,7 @@ import assert from "assert";
 
 const OUTER_INTERVAL = 10_000;
 
-const TX_DURATION = 120_000; // 2 minutes
+const TX_DURATION = 120_000;
 
 const SEND_OPTIONS = {
     skipPreflight: true,
@@ -99,11 +99,11 @@ interface Config {
     payer: number[]
     pythAccount: number[]
     programId: string
-    fetchInterval: number           // Jupiter データを取得する時間間隔
-    updateThreshold: number         // オンチェーンデータを更新する価格変動 (%) の閾値
-    updateInterval: number          // オンチェーンデータを強制的に更新する時間間隔
-    confidence: number              // 信頼区間
-    inactiveDuration: number        // これより長い時間更新されなかったら強制的にステータスを無効にする (設定値が 0 なら無視)
+    fetchInterval: number
+    updateThreshold: number
+    updateInterval: number
+    confidence: number
+    inactiveDuration: number
 }
 
 class Main extends BasicRunnable<Config> {
@@ -137,14 +137,11 @@ class Main extends BasicRunnable<Config> {
 
         const oraclePrice = price ? 1.0 / price : 0;
 
-        // トランザクションの準備
         const tx = composeUpdatePriceTransaction(this.connection, this.programId, this.pythAccount.publicKey, oraclePrice, this.confidence, status);
         const { blockhash } = await this.connection.getLatestBlockhash();
         tx.recentBlockhash = blockhash;
         tx.sign(this.payer, this.pythAccount);
         
-        // トランザクションの実行（2 分ほどかけて TX チェックと再送を行い、それでもダメならタイムアウト）
-        // ただし、メインループの処理を実行するために、新たな Promise を起動し、本関数からは TX 完了を待たずに抜ける
         transactionSenderAndConfirmationWaiter(this.connection, tx).then(({txid, transactionResponse}) => {
             this.logger.debug(`executed update tx: ${txid}`);
         }).catch();
@@ -155,7 +152,6 @@ class Main extends BasicRunnable<Config> {
     }
 
     needUpdate(price: number, now: number): boolean {
-        // N% の変動または一定時間経過で更新
         if (now > this.lastUpdate + this.updateInterval)
             return true;
 
@@ -177,13 +173,10 @@ class Main extends BasicRunnable<Config> {
         this.fetchInterval = config.fetchInterval;
         this.updateThreshold = config.updateThreshold;
         this.updateInterval = config.updateInterval;
-
         this.confidence = config.confidence;
-
         this.inactiveDuration = config.inactiveDuration;
 
-        // DEBUG ログを非表示にするには、以下の行をアンコメント。
-        // this.logger.setSettings({'minLevel': 'info'});
+        this.logger.setSettings({'minLevel': 'info'});
 
         if (this.inactiveDuration && this.inactiveDuration < this.updateInterval) {
             this.logger.error("inappropriate config: 'inactiveDuration' must be longer than 'updateInterval'");
@@ -196,7 +189,6 @@ class Main extends BasicRunnable<Config> {
 
         while (!this._done) {
             try {
-                // コネクションなど長時間稼働中に作り直しが必要かもしれないオブジェクトはループ内で構築。
                 this.connection = new Connection(config.connection);
                 const marinadeConfig = new MarinadeConfig({connection: this.connection});
                 const marinade = new Marinade(marinadeConfig);
@@ -211,7 +203,6 @@ class Main extends BasicRunnable<Config> {
                         await this.updatePrice(mSolPrice, 1, now);
                     }
 
-                    // 最終更新から時間が経っていたらデータが取得できない状態がしばらく続いている可能性があるのでステータスを無効にする
                     if (this.inactiveDuration && now > this.lastUpdate + this.inactiveDuration && this.lastStatus) {
                         this.logger.warn(`disabling oracle: no update for ${this.inactiveDuration} ms`);
                         await this.updatePrice(this.lastPrice, 0, now);
