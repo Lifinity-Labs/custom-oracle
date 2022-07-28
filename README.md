@@ -1,4 +1,4 @@
-# Custome Oracle
+# Custom Oracle
 
 Custom Oracle is a Solana program that records and publishes price feeds using [pyth.network's](https://pyth.network/) data structure.
 
